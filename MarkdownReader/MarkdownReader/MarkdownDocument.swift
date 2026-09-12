@@ -1,4 +1,4 @@
-import SwiftUI
+import Foundation
 import UniformTypeIdentifiers
 
 extension UTType {
@@ -6,32 +6,65 @@ extension UTType {
     static let markdown = UTType(importedAs: "net.daringfireball.markdown")
 }
 
-struct MarkdownDocument: FileDocument {
-    // .markdown 放第一位：文档浏览器新建文件时默认存为 .md
-    static var readableContentTypes: [UTType] { [.markdown, .plainText] }
-    static var writableContentTypes: [UTType] { [.markdown, .plainText] }
-
-    var text: String
-
-    init(text: String = "") {
-        self.text = text
+/// App 沙盒内 Markdown 文件的读写与导入
+enum MarkdownFileStore {
+    static var documentsDirectory: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
 
-    init(configuration: ReadConfiguration) throws {
-        guard let data = configuration.file.regularFileContents else {
-            throw CocoaError(.fileReadCorruptFile)
+    /// 列出沙盒 Documents 顶层的 .md/.markdown 文件，按修改时间倒序
+    static func listFiles() -> [URL] {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: documentsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return urls
+            .filter { ["md", "markdown"].contains($0.pathExtension.lowercased()) }
+            .sorted {
+                let d0 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let d1 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return d0 > d1
+            }
+    }
+
+    /// 把外部文件（微信/文件 App 分享、fileImporter）复制进沙盒，返回沙盒内的 URL
+    static func importFile(from url: URL) -> URL? {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessing { url.stopAccessingSecurityScopedResource() }
         }
-        if let string = String(data: data, encoding: .utf8) {
-            text = string
-        } else if let string = String(data: data, encoding: .utf16) {
-            text = string
-        } else {
-            // 容错：替换非法字节，避免打开失败
-            text = String(decoding: data, as: UTF8.self)
+        let destination = uniqueURL(for: url.lastPathComponent)
+        do {
+            try FileManager.default.copyItem(at: url, to: destination)
+            return destination
+        } catch {
+            return nil
         }
     }
 
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: Data(text.utf8))
+    /// 新建空文档，返回 URL
+    static func createNew() -> URL? {
+        let url = uniqueURL(for: "未命名.md")
+        do {
+            try "# 未命名\n".write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    /// 重名时自动加序号：xx.md → xx 2.md → xx 3.md
+    static func uniqueURL(for fileName: String) -> URL {
+        let base = (fileName as NSString).deletingPathExtension
+        let ext = (fileName as NSString).pathExtension
+        var candidate = documentsDirectory.appendingPathComponent(fileName)
+        var index = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = documentsDirectory.appendingPathComponent("\(base) \(index).\(ext)")
+            index += 1
+        }
+        return candidate
     }
 }

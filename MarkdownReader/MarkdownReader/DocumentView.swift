@@ -5,14 +5,13 @@ struct DocumentView: View {
         case reading, editing
     }
 
-    @Binding var document: MarkdownDocument
-    let fileURL: URL?
+    let fileURL: URL
 
+    @State private var text = ""
     @State private var mode: Mode
     @State private var showingSettings = false
 
-    init(document: Binding<MarkdownDocument>, fileURL: URL?) {
-        _document = document
+    init(fileURL: URL) {
         self.fileURL = fileURL
         // @AppStorage 无法在 init 中读取自身，直接读 UserDefaults（同一 key，行为一致）
         let saved = UserDefaults.standard.string(forKey: "defaultViewMode") ?? "reading"
@@ -23,12 +22,12 @@ struct DocumentView: View {
         Group {
             switch mode {
             case .reading:
-                ReadingView(markdown: document.text)
+                ReadingView(markdown: text)
             case .editing:
-                EditingView(text: $document.text)
+                EditingView(text: $text)
             }
         }
-        .navigationTitle(fileURL?.deletingPathExtension().lastPathComponent ?? "Markdown")
+        .navigationTitle(fileURL.deletingPathExtension().lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -51,5 +50,25 @@ struct DocumentView: View {
                 SettingsView()
             }
         }
+        .onAppear(perform: load)
+        .onChange(of: text) {
+            save()
+        }
+    }
+
+    private func load() {
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        if let string = String(data: data, encoding: .utf8) {
+            text = string
+        } else if let string = String(data: data, encoding: .utf16) {
+            text = string
+        } else {
+            // 容错：替换非法字节，避免打开失败
+            text = String(decoding: data, as: UTF8.self)
+        }
+    }
+
+    private func save() {
+        try? text.write(to: fileURL, atomically: true, encoding: .utf8)
     }
 }
